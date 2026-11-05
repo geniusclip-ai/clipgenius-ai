@@ -21,7 +21,15 @@ st.set_page_config(
     layout="wide"
 )
 
-MODEL = "gemini-3.8-flash"
+# ---------------------------------
+# AI MODEL CONFIGURATION
+# ---------------------------------
+
+PRIMARY_MODEL = "gemini-3.8-flash"
+BACKUP_MODEL = "gemini-3.5-flash-lite"
+
+MAX_RETRIES = 3
+RETRY_DELAYS = [2, 4, 8]
 
 st.markdown("""
 <style>
@@ -39,9 +47,105 @@ div.stButton > button {
 """, unsafe_allow_html=True)
 
 
+
 # ---------------------------------
-# HELPER FUNCTIONS
+# GEMINI ERROR HANDLING
 # ---------------------------------
+
+def is_temporary_error(error):
+    """Identify errors that may recover after retrying."""
+
+    message = str(error).lower()
+
+    status = (
+        getattr(error, "code", None)
+        or getattr(error, "status_code", None)
+    )
+
+    try:
+        status = int(status)
+    except (TypeError, ValueError):
+        status = None
+
+    temporary_statuses = [408, 429, 500, 502, 503, 504]
+
+    if status in temporary_statuses:
+        return True
+
+    temporary_messages = [
+        "503",
+        "429",
+        "500",
+        "502",
+        "504",
+        "service unavailable",
+        "high demand",
+        "resource exhausted",
+        "rate limit",
+        "temporarily unavailable",
+        "internal server error",
+        "deadline exceeded"
+    ]
+
+    return any(item in message for item in temporary_messages)
+
+
+def create_interaction_with_fallback(client, input_data):
+
+    models = [PRIMARY_MODEL, BACKUP_MODEL]
+
+    errors = []
+
+    for model in models:
+
+        st.info(f"Trying AI model: {model}")
+
+        for attempt in range(MAX_RETRIES):
+
+            try:
+                response = client.interactions.create(
+                    model=model,
+                    input=input_data
+                )
+
+                st.success(f"Successfully processed using {model}")
+
+                return response
+
+            except Exception as error:
+
+                errors.append(f"{model}: {error}")
+
+                if not is_temporary_error(error):
+                    raise
+
+                if attempt < MAX_RETRIES - 1:
+
+                    delay = RETRY_DELAYS[attempt]
+
+                    st.warning(
+                        f"{model} is temporarily unavailable. "
+                        f"Retrying in {delay} seconds "
+                        f"({attempt + 1}/{MAX_RETRIES - 1})."
+                    )
+
+                    time.sleep(delay)
+
+                else:
+
+                    st.warning(
+                        f"{model} failed after "
+                        f"{MAX_RETRIES} attempts."
+                    )
+
+    raise RuntimeError(
+        "Both Gemini models are currently unavailable. "
+        "Please try again later.\n\n"
+        + "\n".join(errors)
+    )
+
+
+
 
 def valid_youtube_url(url):
     try:
@@ -199,36 +303,70 @@ Return ONLY valid JSON in this structure:
 
             time.sleep(5)
 
-        response = client.interactions.create(
-            model=MODEL,
-            input=[
-                {
-                    "type": "video",
-                    "uri": uploaded.uri,
-                    "mime_type": uploaded.mime_type,
-                    "processing": "agentic"
-                },
-                {
-                    "type": "text",
-                    "text": prompt
-                }
-            ]
-        )
+        
+        
+input_data = [
+    {
+        "type": "video",
+        "uri": uploaded.uri,
+        "mime_type": uploaded.mime_type,
+        "processing": "agentic"
+    },
+    {
+        "type": "text",
+        "text": prompt
+    }
+]
+
+response = create_interaction_with_fallback(
+    client,
+    input_data
+)
+
+            
+                
+                    
+                    
+                    
+                
+                
+                
+                
+                    
+                
+            
+        
 
     else:
-        response = client.interactions.create(
-            model=MODEL,
-            input=[
-                {
-                    "type": "video",
-                    "uri": youtube_url
-                },
-                {
-                    "type": "text",
-                    "text": prompt
-                }
-            ]
-        )
+        
+input_data = [
+    {
+        "type": "video",
+        "uri": youtube_url
+    },
+    {
+        "type": "text",
+        "text": prompt
+    }
+]
+
+response = create_interaction_with_fallback(
+    client,
+    input_data
+)
+
+            
+            
+                
+                    
+                    
+                
+                
+                    
+                    
+            
+            
+        
 
     return extract_json(response.output_text)
 
@@ -512,7 +650,30 @@ if st.button(
                     )
 
         except Exception as error:
-            st.error(f"Processing error: {error}")
+
+    error_message = str(error).lower()
+
+    if "both gemini models" in error_message:
+        st.error(
+            "Gemini AI is currently unavailable. "
+            "Both AI models failed. Please try again later."
+        )
+
+    elif "api key" in error_message or "permission" in error_message:
+        st.error(
+            "There may be a problem with your Gemini API key "
+            "or its permissions. Please check your API key."
+        )
+
+    else:
+        st.error(
+            "Video processing failed. "
+            "Please check your video and try again."
+        )
+
+    with st.expander("Technical error details"):
+        st.code(str(error))
+            
 
 
 # ---------------------------------
